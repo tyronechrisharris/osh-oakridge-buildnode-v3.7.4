@@ -1,0 +1,37 @@
+"use client";
+
+import {Grid, Paper, Typography} from "@mui/material";
+import dynamic from "next/dynamic";
+import {useMemo} from "react";
+import {useLanguage} from "@/app/contexts/LanguageContext";
+import SuspenseLoad from "@/app/_components/SuspenseLoad";
+
+export default function MapViewPage() {
+    const { t } = useLanguage();
+
+
+    const Map = useMemo(() => dynamic(
+        () => import('@/app/_components/maps/MapComponent'),
+        {
+            loading: () => <SuspenseLoad />,
+            ssr: false
+        }
+    ),[])
+
+    return (
+        <Grid container spacing={2} width={"100%"}>
+            <Grid item xs={12}>
+                <Typography variant="h4">
+                    { t('map') }
+                </Typography>
+            </Grid>
+            <Grid item xs={12} sx={{ gap: 2, minWidth: 0 }}>
+                <Paper variant='outlined' sx={{ padding: 1 }}>
+                    <Map/>
+                </Paper>
+            </Grid>
+        </Grid>
+    );
+}
+
+

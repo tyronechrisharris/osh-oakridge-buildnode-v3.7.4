@@ -1,0 +1,1328 @@
+/*
+ * Copyright (c) 2024.  Botts Innovative Research, Inc.
+ * All Rights Reserved
+ */
+
+"use client";
+
+import {
+    SnackbarCloseReason,
+    Stack,
+    Typography,
+    Box,
+    Button,
+    Paper,
+    Snackbar,
+    TextField, FormControlLabel, Checkbox, DialogTitle,
+    Dialog,
+    DialogContent,
+    DialogActions,
+    Divider,
+    Grid,
+    Select,
+    MenuItem,
+    FormControl,
+    InputLabel, SelectChangeEvent,
+} from "@mui/material";
+import React, {ChangeEvent, useContext, useEffect, useRef, useState} from "react";
+import AdjudicationLog from "./AdjudicationLog"
+import {EventTableData} from "@/lib/data/oscar/TableHelpers";
+import {AdjudicationCode, AdjudicationCodes} from "@/lib/data/oscar/adjudication/models/AdjudicationConstants";
+import {DataSourceContext} from "@/app/contexts/DataSourceContext";
+import AdjudicationData from "@/lib/data/oscar/adjudication/Adjudication";
+import {LaneMapEntry} from "@/lib/data/oscar/LaneCollection";
+import ObservationFilter from "osh-js/source/core/consysapi/observation/ObservationFilter";
+import ControlStream from "osh-js/source/core/consysapi/controlstream/ControlStream";
+import {isAdjudicationControlStream} from "@/lib/data/oscar/Utilities";
+import {generateAdjudicationCommandJSON, sendCommand} from "@/lib/data/oscar/OSCARCommands";
+import SecondaryInspectionSelect from "./SecondaryInspectionSelect";
+import UploadFileRoundedIcon from '@mui/icons-material/UploadFileRounded';
+import InsertDriveFileRoundedIcon from '@mui/icons-material/InsertDriveFileRounded';
+import AdjudicationSelect from "./AdjudicationSelect";
+import IsotopeSelect from "./IsotopeSelect";
+import IconButton from "@mui/material/IconButton";
+import DeleteOutline from "@mui/icons-material/DeleteOutline"
+import {setAdjudicatedEventId, setSelectedEvent} from "@/lib/state/EventDataSlice";
+import {useAppDispatch} from "@/lib/state/Hooks";
+import {INode} from "@/lib/data/osh/Node";
+import {QrCode} from "@mui/icons-material";
+import QrScanner from "qr-scanner";
+import {CloseIcon} from "next/dist/client/components/react-dev-overlay/internal/icons/CloseIcon";
+import DetectorResponseFunction from "./DetectorResponseFunction";
+import SpectrumTypeSelector from "@/app/_components/adjudication/SpectrumTypeSelector";
+import WebIdAnalysis from "@/app/_components/adjudication/WebIdAnalysis";
+import WebIdAnalysisResult from "@/lib/data/oscar/adjudication/WebId";
+import {useSelector} from "react-redux";
+import {RootState} from "@/lib/state/Store";
+import {selectLaneMap} from "@/lib/state/OSCARLaneSlice";
+import {randomUUID} from "osh-js/source/core/utils/Utils";
+import { useBreakpoint } from "@/app/providers";
+import N42Detail from "@/app/_components/n42/N42Detail";
+
+interface FileWithWebId {
+    file: File;
+    webIdEnabled: boolean;
+    detectorResponseFunction: string;
+    spectrumType: string;
+    synthesizeBackground: boolean;
+    serverPath?: string;
+}
+
+// qr code auto true = webIdEnabled
+
+interface ScannedDataWithWebId {
+    text: string;
+    webIdEnabled: boolean;
+    detectorResponseFunction: string;
+    spectrumType: string;
+    synthesizeBackground: boolean;
+    serverPath?: string;
+}
+
+export default function AdjudicationDetail(props: { event: EventTableData }) {
+    const { isMobile, isSmallTablet } = useBreakpoint();
+    const dispatch = useAppDispatch();
+
+    const [uploadedFiles, setUploadedFiles] = useState<FileWithWebId[]>([])
+    const [adjudicationCode, setAdjudicationCode] = useState(AdjudicationCodes.codes[0]);
+    const [isotope, setIsotope] = useState<string[]>([]);
+    const [secondaryInspection, setSecondaryInspection] = useState('');
+
+    const [vehicleId, setVehicleId] = useState<string>("");
+    const [feedback, setFeedback] = useState<string>("");
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+    const [openDialog, setOpenDialog] = useState(false);
+    const [openConfirmDialog, setOpenConfirmDialog] = useState(false);
+    const videoElement = useRef<HTMLVideoElement>(null);
+    const [scannedData, setScannedData] = useState<ScannedDataWithWebId[]>([]);
+    const scanner = useRef<QrScanner>();
+
+    const laneMapRef = useContext(DataSourceContext).laneMapRef;
+
+    const adjudication = props.event ? new AdjudicationData(new Date().toISOString(), props.event.occupancyCount, props.event.occupancyObsId) : null;
+    const [adjData, setAdjData] = useState<AdjudicationData>(adjudication);
+
+    const [adjSnackMsg, setAdjSnackMsg] = useState('');
+    const [colorStatus, setColorStatus] = useState('');
+    const [openSnack, setOpenSnack] = useState(false);
+    const [shouldFetchLogs, setShouldFetchLogs] = useState<boolean>(false);
+    const [webIdResults, setWebIdResults] = useState<WebIdAnalysisResult[]>([]);
+    const [selectedWebIdResultId, setSelectedWebIdResultId] = useState<string[]>([]);
+    const [isSubmittingWebId, setIsSubmittingWebId] = useState(false);
+
+    function onFetchComplete() {
+        setShouldFetchLogs(false);
+    }
+
+    useEffect(() => {
+        const loadOccupancyObservation = async () => {
+            if (!props.event.occupancyObsId) {
+                try {
+                    const currentLane = props.event.laneId;
+                    const currLaneEntry: LaneMapEntry = laneMapRef.current.get(currentLane);
+
+                    if (!currLaneEntry) {
+                        console.error("Lane entry not found:", currentLane);
+                        return;
+                    }
+
+                    const ds = currLaneEntry.datastreams.find(
+                        (ds: any) => ds.properties.id === props.event.dataStreamId
+                    );
+
+                    if (!ds) {
+                        console.error("Datastream not found:", props.event.dataStreamId);
+                        return;
+                    }
+
+                    const filter = new ObservationFilter({
+                        filter: `startTime='${props.event.startTime}' AND endTime='${props.event.endTime}'`
+                    });
+
+                    let query = await ds.searchObservations(filter, 10000);
+                    const occupancyObservation = await query.nextPage();
+
+                    if (!occupancyObservation || occupancyObservation.length === 0) {
+                        setAdjSnackMsg('Cannot find observation to adjudicate. Please try again.');
+                        setColorStatus('error');
+                        setOpenSnack(true);
+                        return;
+                    }
+
+                    props.event.occupancyObsId = occupancyObservation[0].id;
+                    props.event.rpmSystemId = ds.properties["system@id"];
+
+                    setAdjData(prevAdjData => {
+                        if (prevAdjData) {
+                            prevAdjData.occupancyObsId = occupancyObservation[0].id;
+                        }
+                        return prevAdjData;
+                    });
+
+                } catch (err) {
+                    console.error(err);
+                    setAdjSnackMsg('Error loading observation.');
+                    setColorStatus('error');
+                    setOpenSnack(true);
+                }
+            }
+        };
+
+        loadOccupancyObservation();
+    }, [
+        props.event.occupancyObsId,
+        props.event.laneId,
+        props.event.startTime,
+        props.event.endTime,
+        props.event.dataStreamId,
+        laneMapRef
+    ]);
+
+    const handleWebIdAnalysis = (fileIndex: number) => (event: React.ChangeEvent<HTMLInputElement>) => {
+        setUploadedFiles(prevFiles =>
+            prevFiles.map((fileData, idx) =>
+                idx === fileIndex ? {...fileData, webIdEnabled: event.target.checked} : fileData
+            )
+        );
+    };
+
+    const handleQRCodeWebIdAnalysis = (fileIndex: number) => (event: React.ChangeEvent<HTMLInputElement>) => {
+        setScannedData(prevFiles =>
+            prevFiles.map((fileData, idx) =>
+                idx === fileIndex ? {...fileData, webIdEnabled: event.target.checked} : fileData
+            )
+        );
+    };
+
+    const handleCloseQrCodeDialog = () => {
+        scanner?.current?.stop();
+        scanner.current = undefined;
+        setOpenDialog(false);
+    }
+
+    const handleQrCode = () => {
+        setOpenDialog(true);
+    };
+
+    useEffect(() => {
+        if (openDialog && !scanner.current) {
+            const timeoutId = setTimeout(() => {
+                if (!videoElement.current) {
+                    console.error("Video element not found");
+                    setAdjSnackMsg("Failed to initialize camera");
+                    setOpenSnack(true);
+                    return;
+                }
+
+                const qrOptions = {
+                    onDecodeError: (err: any) => console.error("QR Scan Error:", err),
+                    preferredCamera: "environment", //this will detect automatically to use the back camera on the phone
+                    highlightScanRegion: true,
+                }
+
+                scanner.current = new QrScanner(videoElement.current, (result) => {
+                    let newData: ScannedDataWithWebId = {
+                        text: result.data,
+                        detectorResponseFunction: "",
+                        spectrumType: "",
+                        webIdEnabled: true,
+                        synthesizeBackground: false
+                    }
+
+                    setScannedData(prev => {
+                        if (prev.some(item => item.text === result.data))
+                            return prev;
+                        return [...prev, newData]
+                    });
+                }, qrOptions);
+
+                scanner.current.start().catch((err) => {
+                    console.error("Error starting scanner:", err);
+                    setAdjSnackMsg("Failed to start camera");
+                    setColorStatus('error');
+                    setOpenSnack(true);
+                });
+            }, 100);
+
+            return () => clearTimeout(timeoutId);
+        }
+    }, [openDialog]);
+
+
+    const handleFileUpload = (e: ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files === null) {
+            return;
+        }
+
+        const files = Array.from(e.target.files);
+
+        const filesWithWebId = files.map(file => ({
+            file,
+            webIdEnabled: false,
+            detectorResponseFunction: "",
+            spectrumType: "",
+            synthesizeBackground: false
+        }));
+
+        setUploadedFiles([...uploadedFiles, ...filesWithWebId]);
+        e.target.value = '';
+    };
+
+    const handleFileDelete = (fileIndex: number) => {
+        setUploadedFiles((prevState) => prevState.filter((_, i) => i !== fileIndex));
+    }
+
+    const handleAdjudicationSelect = (value: AdjudicationCode) => {
+        let tAdjData: AdjudicationData = adjData;
+        tAdjData.adjudicationCode = AdjudicationCodes.getCodeObjByLabel(value.label);
+
+        setAdjData(tAdjData);
+        setAdjudicationCode(value);
+    }
+
+    const handleIsotopeSelect = (value: string[]) => {
+        let tAdjData = adjData;
+        tAdjData.isotopes = value;
+        setIsotope(value);
+        setAdjData(tAdjData);
+    }
+
+    const handleInspectionSelect = (value: string) => {
+        let tAdjData = adjData;
+        tAdjData.secondaryInspectionStatus = value;
+        setSecondaryInspection(value);
+        setAdjData(tAdjData);
+    }
+
+    const handleDrfSelection = (fileIndex: number) => (value: string) => {
+        setUploadedFiles(prevFiles =>
+            prevFiles.map((fileData, idx) =>
+                idx === fileIndex ? {...fileData, detectorResponseFunction: value} : fileData
+            )
+        );
+    }
+
+    const handleSpectrumType = (fileIndex: number) => (value: string) => {
+        setUploadedFiles(prevFiles =>
+            prevFiles.map((fileData, idx) =>
+                idx === fileIndex ? {...fileData, spectrumType: value} : fileData
+            )
+        );
+    }
+
+    const handleSynthesizeBackground = (fileIndex: number) => (event: React.ChangeEvent<HTMLInputElement>) => {
+        setUploadedFiles(prevFiles =>
+            prevFiles.map((fileData, idx) =>
+                idx === fileIndex ? {...fileData, synthesizeBackground: event.target.checked} : fileData
+            )
+        );
+    };
+
+    const handleScannedDataDrfSelection = (index: number) => (value: string) => {
+        setScannedData(prev =>
+            prev.map((data, idx) =>
+                idx === index ? {...data, detectorResponseFunction: value} : data
+            )
+        );
+    }
+
+    const handleScannedDataSpectrumType = (index: number) => (value: string) => {
+        setScannedData(prev =>
+            prev.map((data, idx) =>
+                idx === index ? {...data, spectrumType: value} : data
+            )
+        );
+    }
+
+    const handleScannedDataSynthesizeBackground = (fileIndex: number) => (event: React.ChangeEvent<HTMLInputElement>) => {
+        setScannedData(prevFiles =>
+            prevFiles.map((fileData, idx) =>
+                idx === fileIndex ? {...fileData, synthesizeBackground: event.target.checked} : fileData
+            )
+        );
+    };
+
+    const handleScannedDataDelete = (index: number) => {
+        setScannedData(prev => prev.filter((_, i) => i !== index));
+    }
+
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const {name, value} = e.target;
+
+        let tempAdjData = adjData;
+
+        if (name === 'vehicleId') {
+            setVehicleId(value);
+            tempAdjData.vehicleId = value;
+        } else if (name === 'notes') {
+            setFeedback(value)
+            tempAdjData.feedback = value;
+        }
+
+        setAdjData(tempAdjData);
+    }
+
+    function resetForm() {
+        setVehicleId('')
+        setAdjData(adjudication);
+        setUploadedFiles([]);
+        setScannedData([]);
+        setSecondaryInspection('');
+        setIsotope([]);
+        setAdjudicationCode(AdjudicationCodes.codes[0]);
+        setFeedback('')
+        setWebIdResults([]);
+        setSelectedWebIdResultId([]);
+    }
+
+    const sendAdjudicationData = async () => {
+        if (adjData.adjudicationCode === null || !adjData.adjudicationCode || adjData.adjudicationCode === AdjudicationCodes.codes[0]) {
+            setAdjSnackMsg("Please selected a valid adjudication code before submitting.");
+            setColorStatus('error');
+            setOpenSnack(true)
+            return;
+        }
+
+        setOpenConfirmDialog(true);
+    }
+
+    const confirmAndSubmitAdjudication = async () => {
+        setOpenConfirmDialog(false);
+
+        const phenomenonTime = new Date().toISOString();
+
+        let tempAdjData: AdjudicationData = adjData;
+
+        tempAdjData.setTime(phenomenonTime);
+        tempAdjData.setFilePaths(uploadedFiles.map(f => f.file.name));
+        tempAdjData.setAdjudicationCode(adjData.adjudicationCode);
+        tempAdjData.setVehicleId(adjData.vehicleId);
+        tempAdjData.setFeedback(adjData.feedback);
+        tempAdjData.setIsotopes(adjData.isotopes);
+        tempAdjData.setOccupancyObsId(adjData.occupancyObsId);
+
+        // send to server
+        const currentLane = props.event.laneId;
+        const currLaneEntry: LaneMapEntry = laneMapRef.current.get(currentLane);
+
+        await submitAdjudication(currLaneEntry, tempAdjData, uploadedFiles)
+    }
+
+    const submitAdjudication = async (currLaneEntry: any, tempAdjData: any, files: FileWithWebId[]) => {
+        try {
+            let ds = currLaneEntry.datastreams.find((ds: any) => ds.properties.id == props.event.dataStreamId);
+
+            let streams = currLaneEntry.controlStreams.length > 0 ? currLaneEntry.controlStreams : await currLaneEntry.parentNode.fetchNodeControlStreams();
+            let adjControlStream = streams.find((stream: typeof ControlStream) => isAdjudicationControlStream(stream));
+
+            if (!adjControlStream) {
+                setAdjSnackMsg("Failed: cannot find adjudication control stream for occupancy.");
+                setColorStatus('error')
+                setOpenSnack(true);
+                return;
+            }
+
+            if (tempAdjData.occupancyObsId === null) {
+                let query = await ds.searchObservations(new ObservationFilter({
+                    filter: `startTime='${props.event.startTime}' AND endTime='${props.event.endTime}'`
+                }), 1);
+
+                const occupancyObservation = await query.nextPage();
+
+                if (!occupancyObservation) {
+                    setAdjSnackMsg('Cannot find observation to adjudicate. Please try again.');
+                    setColorStatus('error')
+                    setOpenSnack(true);
+                    return;
+                }
+
+                props.event.occupancyObsId = occupancyObservation[0].id;
+                props.event.rpmSystemId = ds.properties["system@id"];
+                tempAdjData.occupancyObsId = occupancyObservation[0].id;
+            }
+
+            const alreadyUploaded = files.filter(f => f.serverPath);
+            const needsUpload = files.filter(f => !f.serverPath);
+
+            let qrCodeFiles = createFilesForQRCode(scannedData.filter(d => !d.serverPath));
+            qrCodeFiles.forEach(file => needsUpload.push(file));
+
+            const newFileNames = needsUpload.length > 0
+                ? await sendFileUploadRequest(needsUpload, currLaneEntry.parentNode)
+                : [];
+
+            if (needsUpload.length > 0 && (!newFileNames || newFileNames.length === 0)) {
+                return;
+            }
+
+            const alreadyUploadedPaths = [
+                ...alreadyUploaded.map(f => f.serverPath!),
+                ...scannedData.filter(d => d.serverPath).map(d => d.serverPath!),
+            ];
+            let allFiles = [...alreadyUploadedPaths, ...(newFileNames || [])]
+
+            const response = await sendCommand(
+                currLaneEntry.parentNode,
+                adjControlStream.properties.id,
+                generateAdjudicationCommandJSON(
+                    tempAdjData.feedback,
+                    tempAdjData.adjudicationCode,
+                    tempAdjData.isotopes,
+                    tempAdjData.secondaryInspectionStatus,
+                    // files.map(file => 'adjudication/' + file.file.name),
+                    allFiles,
+                    tempAdjData.occupancyObsId,
+                    tempAdjData.vehicleId
+                )
+            );
+
+            if (!response.ok) {
+                setAdjSnackMsg('Adjudication failed to submit.')
+                setColorStatus('error')
+                setOpenSnack(true);
+                return;
+            }
+
+            props.event.adjudicatedData = tempAdjData;
+
+            setAdjSnackMsg('Adjudication successful for Occupancy ID: ' + props.event.occupancyCount);
+            setColorStatus('success')
+
+            dispatch(setSelectedEvent(props.event));
+            dispatch(setAdjudicatedEventId(props.event.id));
+
+            setShouldFetchLogs(true);
+            setOpenSnack(true);
+            resetForm();
+        } catch (error) {
+            setAdjSnackMsg('Adjudication failed to submit.')
+            setColorStatus('error')
+            setOpenSnack(true);
+        }
+    }
+
+    const laneMap = useSelector((state: RootState) => selectLaneMap(state));
+
+    const laneUid = laneMap.get(props.event?.laneId)?.laneSystem?.properties?.properties?.uid;
+
+    function createFilesForQRCode(qrCodeData: ScannedDataWithWebId[]) {
+        let newFiles: FileWithWebId[] = [];
+
+        const options = {
+            type: "text/plain;charset=utf-8",
+        };
+
+        qrCodeData.forEach((code) => {
+            let fileName = 'foreground-' + randomUUID() + ".txt"
+            let fileBits = code.text;
+            const file = new File([fileBits], fileName, options);
+
+            let fileWithId: FileWithWebId = {
+                file,
+                webIdEnabled: true,
+                detectorResponseFunction: code.detectorResponseFunction,
+                spectrumType: code.spectrumType ? code.spectrumType : 'foreground',
+                synthesizeBackground: code.synthesizeBackground
+            }
+            newFiles.push(fileWithId);
+        })
+
+        return newFiles;
+    }
+
+    async function sendFileUploadRequest(filePaths: FileWithWebId[], node: INode) {
+        let newFileNames: any[] = [];
+
+        const protocol = node.isSecure ? 'https://' : 'http://';
+
+        const webIdFiles = filePaths.filter(f => f.webIdEnabled);
+        const foregroundFile = webIdFiles.find(f => f.spectrumType === 'foreground');
+        const backgroundFile = webIdFiles.find(f => f.spectrumType === 'background');
+        const hasPair = foregroundFile && backgroundFile;
+
+        const pairedFiles = hasPair ? new Set([foregroundFile, backgroundFile]) : new Set<FileWithWebId>();
+
+        if (hasPair) {
+            const drf = foregroundFile.detectorResponseFunction || backgroundFile.detectorResponseFunction;
+            const endpoint = `${protocol}${node.address}:${node.port}${node.oshPathRoot}${node.bucketsEndpoint}/adjudication?occupancyObsId=${props.event.occupancyObsId}&laneUid=${laneUid}&webIdEnabled=${foregroundFile.webIdEnabled}&drf=${drf}`;
+            const url = new URL(endpoint);
+
+            const formData = new FormData();
+            formData.append('foreground', foregroundFile.file);
+            formData.append('background', backgroundFile.file);
+
+            const options: RequestInit = {
+                method: 'POST',
+                headers: node.getBasicAuthHeader(),
+                mode: 'cors',
+                credentials: 'include',
+                body: formData
+            };
+
+            const response = await fetch(url, options);
+            if (!response.ok) {
+                console.error("Failed uploading paired WebID files:", response);
+                setAdjSnackMsg('Failed to upload paired WebID files.');
+                setColorStatus('error');
+                setOpenSnack(true);
+            }
+
+            let filesNames: string[] = await response.json();
+
+            filesNames.forEach(path => newFileNames.push(path))
+        }
+
+        for (const fileData of filePaths) {
+            if (pairedFiles.has(fileData)) continue;
+
+            let fileName = `adjudication?occupancyObsId=${props.event.occupancyObsId}&laneUid=${laneUid}&webIdEnabled=${fileData.webIdEnabled}`
+
+            if (fileData.webIdEnabled)
+                fileName = fileName + `&drf=${fileData.detectorResponseFunction}&synthesizeBackground=${fileData.synthesizeBackground}`
+
+
+
+            let endpoint = `${protocol}${node.address}:${node.port}${node.oshPathRoot}${node.bucketsEndpoint}/${fileName}`;
+
+            const url = new URL(endpoint);
+
+            const formData = new FormData();
+            formData.append('foreground', fileData.file);
+
+            const options: RequestInit = {
+                method: 'POST',
+                headers: node.getBasicAuthHeader(),
+                mode: 'cors',
+                credentials: 'include',
+                body: formData
+            };
+
+            const response = await fetch(url, options);
+            if (!response.ok) {
+                console.error("Failed uploading file:", fileData.file.name, response);
+                setAdjSnackMsg(`Failed to upload file: ${fileData.file.name}`);
+                setColorStatus('error');
+                setOpenSnack(true);
+                return;
+            }
+
+            setAdjSnackMsg(`Successfully uploaded file: ${fileName}`);
+            setColorStatus('success');
+            setOpenSnack(true);
+
+            let filesNames: string[] = await response.json();
+            filesNames.forEach(path => newFileNames.push(path))
+        }
+
+        return newFileNames;
+    }
+
+    const handleWebIdResults = (results: WebIdAnalysisResult[]) => {
+        setWebIdResults(results);
+    };
+
+    const applySelectedWebIdResult = () => {
+        if (selectedWebIdResultId.length === 0) return;
+        const selectedResults = webIdResults.filter(r => selectedWebIdResultId.includes(r.id));
+        const allNames = new Set<string>();
+        selectedResults.forEach(result => {
+            result.isotopes?.forEach(iso => {
+                allNames.add(iso.name); // maybe need to map these to the isotopes list to make sure we dont duplicate names ....
+            });
+        });
+        handleIsotopeSelect(Array.from(allNames));
+    };
+
+    const submitToWebId = async () => {
+        setIsSubmittingWebId(true);
+        try {
+            const currentLane = props.event.laneId;
+            const currLaneEntry: LaneMapEntry = laneMapRef.current.get(currentLane);
+            const node = currLaneEntry.parentNode;
+
+            const webIdFileIndices: number[] = [];
+            const webIdFilesToUpload: FileWithWebId[] = [];
+            uploadedFiles.forEach((f, idx) => {
+                if (f.webIdEnabled && !f.serverPath) {
+                    webIdFileIndices.push(idx);
+                    webIdFilesToUpload.push(f);
+                }
+            });
+
+            const qrIndices: number[] = [];
+            const qrToConvert: ScannedDataWithWebId[] = [];
+            scannedData.forEach((d, idx) => {
+                if (d.webIdEnabled && !d.serverPath) {
+                    qrIndices.push(idx);
+                    qrToConvert.push(d);
+                }
+            });
+
+            const qrAsFiles = createFilesForQRCode(qrToConvert);
+            const allToUpload = [...webIdFilesToUpload, ...qrAsFiles];
+
+            if (allToUpload.length === 0) {
+                setAdjSnackMsg('No new WebID files to submit.');
+                setColorStatus('info');
+                setOpenSnack(true);
+                return;
+            }
+
+            const serverPaths = await sendFileUploadRequest(allToUpload, node);
+
+            if (!serverPaths || serverPaths.length === 0) return;
+
+            let pathIdx = 0;
+
+            setUploadedFiles(prev => prev.map((f, i) => {
+                if (webIdFileIndices.includes(i) && pathIdx < serverPaths.length) {
+                    return { ...f, serverPath: serverPaths[pathIdx++] };
+                }
+                return f;
+            }));
+
+            setScannedData(prev => prev.map((d, i) => {
+                if (qrIndices.includes(i) && pathIdx < serverPaths.length) {
+                    return { ...d, serverPath: serverPaths[pathIdx++] };
+                }
+                return d;
+            }));
+
+            setAdjSnackMsg('Files submitted to WebID successfully.');
+            setColorStatus('success');
+            setOpenSnack(true);
+        } catch (error) {
+            setAdjSnackMsg('Failed to submit files to WebID.');
+            setColorStatus('error');
+            setOpenSnack(true);
+        } finally {
+            setIsSubmittingWebId(false);
+        }
+    };
+
+    const handleCloseSnack = (event: React.SyntheticEvent | Event, reason?: SnackbarCloseReason,) => {
+        if (reason === 'clickaway')
+            return;
+        setOpenSnack(false);
+    };
+
+    const handleEvidenceSelection = (event: SelectChangeEvent<string[]>) => {
+        setSelectedWebIdResultId(event.target.value as string[]);
+    };
+
+    return (
+        <Stack spacing={2}>
+            <Paper variant='outlined' sx={{ p: 2 }}>
+                <Grid container spacing={2} sx={{ width: '100%' }}>
+                    {/*N42 Detail*/}
+                    <Grid item xs={12}>
+                        <N42Detail event={props.event}/>
+                    </Grid>
+                    {/*WebID Results*/}
+                    <Grid item xs={12}>
+                        <WebIdAnalysis
+                            event={props.event}
+                            onWebIdResults={handleWebIdResults}
+                        />
+                    </Grid>
+                    {/*Adj Log*/}
+                    <Grid item xs={12}>
+                        <AdjudicationLog
+                            event={props.event}
+                            node={laneMapRef.current.get(props.event.laneId)?.parentNode}
+                        />
+                    </Grid>
+                </Grid>
+            </Paper>
+
+            {/*Evidence Collection*/}
+            <Paper variant='outlined' sx={{ p: 2 }}>
+                <Grid container spacing={2} sx={{ width: '100%' }}>
+
+                    <Grid item xs={12}>
+                        <Typography variant="h5">
+                            Evidence Collection
+                        </Typography>
+                    </Grid>
+
+                    {uploadedFiles.length > 0 && (
+                        <Grid item xs={12}>
+                            <Paper variant="outlined" sx={{ p: 1 }}>
+                                <Stack
+                                    sx={{
+                                        maxHeight: '150px',
+                                        overflowY: 'auto',
+                                    }}
+                                    spacing={1}
+                                >
+                                    {uploadedFiles.map((fileData, index) => (
+                                        <Stack key={`${fileData.file.name}-${index}`} direction="row" spacing={1} alignItems="center" flexWrap="wrap" p={1}>
+                                            <Box display="flex" alignItems="center" sx={{ minWidth: 0, flex: '1 1 auto' }}>
+                                                <InsertDriveFileRoundedIcon fontSize="small" />
+                                                <Typography variant="body2" noWrap sx={{ ml: 0.5 }}>
+                                                    {fileData.file.name}
+                                                    {fileData.serverPath && (
+                                                        <Typography component="span" variant="caption" color="success.main" sx={{ ml: 1 }}>
+                                                            (uploaded)
+                                                        </Typography>
+                                                    )}
+                                                </Typography>
+                                            </Box>
+
+                                            <Stack direction="row" spacing={1} alignItems="center">
+                                                <FormControlLabel
+                                                    control={
+                                                        <Checkbox
+                                                            size="small"
+                                                            checked={fileData.webIdEnabled}
+                                                            onChange={handleWebIdAnalysis(index)}
+                                                            disabled={!!fileData.serverPath}
+                                                        />
+                                                    }
+                                                    label={<Typography variant="body2">WebID</Typography>}
+                                                    sx={{mr: 0}}
+                                                />
+
+                                                {fileData.webIdEnabled && (
+
+                                                    <>
+                                                        <DetectorResponseFunction
+                                                            onSelect={handleDrfSelection(index)}
+                                                            selectVal={fileData.detectorResponseFunction}
+                                                        />
+                                                        <SpectrumTypeSelector
+                                                            onSelect={handleSpectrumType(index)}
+                                                            selectVal={fileData.spectrumType}
+                                                        />
+                                                        {
+                                                            fileData.spectrumType === 'foreground' && (
+
+                                                                <FormControlLabel
+                                                                    control={
+                                                                        <Checkbox
+                                                                            size="small"
+                                                                            checked={fileData.synthesizeBackground}
+                                                                            onChange={handleSynthesizeBackground(index)}
+                                                                        />
+                                                                    }
+                                                                    label={<Typography variant="body2">Synthesize Background</Typography>}
+                                                                    sx={{mr: 0}}
+                                                                />
+
+                                                            )
+                                                        }
+                                                    </>
+                                                )}
+                                            </Stack>
+                                            <IconButton
+                                                onClick={() => handleFileDelete(index)}
+                                                size="small"
+                                                sx={{
+                                                    padding: "2px",
+                                                    border: "1px solid",
+                                                    borderRadius: "10px",
+                                                    borderColor: "error.main",
+                                                    backgroundColor: "inherit",
+                                                    color: "error.main"
+                                                }}>
+                                                <DeleteOutline fontSize="small" />
+                                            </IconButton>
+                                        </Stack>
+                                    ))}
+                                </Stack>
+                            </Paper>
+                        </Grid>
+                    )}
+
+                    {scannedData.length > 0 && (
+                        <Grid item xs={12}>
+                            <Paper variant="outlined" sx={{ p: 1 }}>
+                                <Stack
+                                    sx={{
+                                        maxHeight: '150px',
+                                        overflowY: 'auto',
+                                    }}
+                                    spacing={1}
+                                >
+                                    {scannedData.map((data, index) => (
+                                        <Stack key={`scanned-${index}`} direction="row" spacing={1} alignItems="center" flexWrap="wrap" p={1}>
+                                            <Box display="flex" alignItems="center" sx={{ minWidth: 0, flex: '1 1 auto' }}>
+                                                <QrCode fontSize="small" color="action"/>
+                                                <Typography variant="body2" noWrap sx={{ ml: 0.5 }}>
+                                                    {data.text.length > 40 ? data.text.substring(0, 40) + '...' : data.text}
+                                                    {data.serverPath && (
+                                                        <Typography component="span" variant="caption" color="success.main" sx={{ ml: 1 }}>
+                                                            (uploaded)
+                                                        </Typography>
+                                                    )}
+                                                </Typography>
+                                            </Box>
+
+                                            <Stack direction="row" spacing={1} alignItems="center">
+                                                <FormControlLabel
+                                                    control={
+                                                        <Checkbox
+                                                            size="small"
+                                                            checked={data.webIdEnabled}
+                                                            onChange={handleQRCodeWebIdAnalysis(index)}
+                                                            disabled={!!data.serverPath}
+                                                        />
+                                                    }
+                                                    label={<Typography variant="body2">WebID</Typography>}
+                                                    sx={{mr: 0}}
+                                                />
+
+                                                {data.webIdEnabled && (
+                                                    <>
+                                                        <DetectorResponseFunction
+                                                            onSelect={handleScannedDataDrfSelection(index)}
+                                                            selectVal={data.detectorResponseFunction}
+                                                        />
+                                                        <SpectrumTypeSelector
+                                                            onSelect={handleScannedDataSpectrumType(index)}
+                                                            selectVal={data.spectrumType}
+                                                        />
+
+                                                        {
+                                                            data.spectrumType === 'foreground' && (
+                                                                <FormControlLabel
+                                                                    control={
+                                                                        <Checkbox
+                                                                            size="small"
+                                                                            checked={data.synthesizeBackground}
+                                                                            onChange={handleScannedDataSynthesizeBackground(index)}
+                                                                        />
+                                                                    }
+                                                                    label={<Typography variant="body2">Synthesize Background</Typography>}
+                                                                    sx={{mr: 0}}
+                                                                />
+                                                            )
+                                                        }
+
+                                                    </>
+                                                )}
+                                                <IconButton
+                                                    onClick={() => handleScannedDataDelete(index)}
+                                                    size="small"
+                                                    sx={{
+                                                        padding: "2px",
+                                                        border: "1px solid",
+                                                        borderRadius: "10px",
+                                                        borderColor: "error.main",
+                                                        backgroundColor: "inherit",
+                                                        color: "error.main"
+                                                    }}>
+                                                    <DeleteOutline fontSize="small" />
+                                                </IconButton>
+                                            </Stack>
+                                        </Stack>
+                                    ))}
+                                </Stack>
+                            </Paper>
+                        </Grid>
+                    )}
+
+                    <Dialog
+                        onClose={handleCloseQrCodeDialog}
+                        open={openDialog}
+                        fullWidth
+                        maxWidth="sm"
+                    >
+                        <IconButton
+                            aria-label="close"
+                            onClick={handleCloseQrCodeDialog}
+                            sx={{
+                                position: 'absolute',
+                                right: 8,
+                                top: 8,
+                            }}
+                        >
+                            <CloseIcon/>
+                        </IconButton>
+                        <DialogTitle sx={{textAlign: 'center', pb: 1}}>
+                            Spectroscopic QR Code Scanner
+                        </DialogTitle>
+                        <Box
+                            sx={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                p: 3,
+                                pt: 1,
+                            }}
+                        >
+                            <Box className='qr-reader'
+                                 sx={{
+                                     width: 400,
+                                     height: 400,
+                                     maxWidth: 400,
+                                     borderRadius: 2,
+                                     overflow: 'hidden',
+                                     backgroundColor: 'black',
+                                     display: 'flex',
+                                     alignItems: 'center',
+                                     justifyContent: 'center',
+                                 }}
+                            >
+                                <video
+                                    ref={videoElement}
+                                    style={{
+                                        width: "100%",
+                                        height: "100%",
+                                        objectFit: "cover"
+                                    }}
+                                />
+                            </Box>
+
+                            {scannedData.length > 0 && (
+                                <Paper
+                                    variant="outlined"
+                                    sx={{mt: 2, p: 2, width: '100%', maxHeight: 150, overflowY: 'auto'}}
+                                >
+                                    <Typography variant="subtitle2" gutterBottom>
+                                        Scanned Codes ({scannedData.length}):
+                                    </Typography>
+                                    <Stack spacing={1}>
+                                        {scannedData.map((data, idx) => (
+                                            <Stack
+                                                key={idx}
+                                                direction="row"
+                                                justifyContent="space-between"
+                                                alignItems="center"
+                                            >
+                                                <Typography variant="body2">
+                                                    {data.text.length > 60 ? data.text.substring(0, 60) + '...' : data.text}
+                                                </Typography>
+                                                <IconButton
+                                                    size="small"
+                                                    onClick={() => handleScannedDataDelete(idx)}
+                                                >
+                                                    <DeleteOutline fontSize="small"/>
+                                                </IconButton>
+                                            </Stack>
+                                        ))}
+                                    </Stack>
+                                </Paper>
+                            )}
+
+                            <Stack direction="row" spacing={2} sx={{mt: 2}}>
+                                {scannedData.length > 0 && (
+                                    <Button
+                                        variant="outlined"
+                                        onClick={() => setScannedData([])}
+                                    >
+                                        Clear All
+                                    </Button>
+                                )}
+                                <Button
+                                    variant="contained"
+                                    onClick={handleCloseQrCodeDialog}
+                                    sx={{minWidth: 120}}
+                                >
+                                    Done Scanning
+                                </Button>
+                            </Stack>
+                        </Box>
+                    </Dialog>
+                    <Grid item container xs={12} spacing={2} alignItems="center">
+                        <Grid item xs={"auto"}>
+                            <Stack direction="row" spacing={2} alignItems="center">
+                                <Button
+                                    component="label"
+                                    startIcon={<UploadFileRoundedIcon/>}
+                                    sx={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        width: "auto",
+                                        padding: "8px",
+                                        borderStyle: "solid",
+                                        borderWidth: "1px",
+                                        borderRadius: "10px",
+                                        borderColor: "secondary.main",
+                                        backgroundColor: "inherit",
+                                        color: "secondary.main"
+                                    }}
+                                >
+                                    Upload Files
+                                    <input
+                                        type="file"
+                                        multiple
+                                        onChange={handleFileUpload}
+                                        ref={fileInputRef}
+                                        style={{display: "none"}}
+                                    />
+                                </Button>
+                                <Button
+                                    component="label"
+                                    startIcon={<QrCode/>}
+                                    sx={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        width: "auto",
+                                        padding: "8px",
+                                        borderStyle: "solid",
+                                        borderWidth: "1px",
+                                        borderRadius: "10px",
+                                        borderColor: "info.main",
+                                        backgroundColor: "inherit",
+                                        color: "info.main"
+                                    }}
+                                    onClick={handleQrCode}
+                                >
+                                    QR Scanner
+                                </Button>
+                                <Button
+                                    variant="outlined"
+                                    color="info"
+                                    onClick={submitToWebId}
+                                    disabled={isSubmittingWebId || (!uploadedFiles.some(f => f.webIdEnabled && !f.serverPath) && !scannedData.some(d => d.webIdEnabled && !d.serverPath))}
+                                    sx={{
+                                        padding: "8px",
+                                        borderRadius: "10px",
+                                    }}
+                                >
+                                    {isSubmittingWebId ? 'Uploading...' : 'Upload to WebID'}
+                                </Button>
+                            </Stack>
+                        </Grid>
+                    </Grid>
+                </Grid>
+            </Paper>
+            {/*Adjudication FORM*/}
+            <Paper variant='outlined' sx={{ p: 2 }}>
+                <Grid container spacing={2} sx={{ width: '100%' }}>
+                    <Grid item container xs={12} spacing={2}>
+                        <Grid item xs={12}>
+                            <Typography variant="h5">
+                                Adjudication Form
+                            </Typography>
+                        </Grid>
+                        <Grid item xs={12} sm={3} lg={2}>
+                            <TextField
+                                label="VehicleId"
+                                name="vehicleId"
+                                value={vehicleId}
+                                onChange={handleChange}
+                                fullWidth
+                            />
+                        </Grid>
+                        <Grid item xs={12} sm={9} lg={10} />
+                        <Grid item xs={12} sm={6}>
+                            <AdjudicationSelect
+                                adjCode={adjudicationCode}
+                                onSelect={handleAdjudicationSelect}
+                            />
+                        </Grid>
+                        <Grid item xs={12} sm={6}>
+                            <IsotopeSelect
+                                isotopeValue={isotope}
+                                onSelect={handleIsotopeSelect}
+                            />
+                        </Grid>
+                        {webIdResults.length > 0 && (
+                            <Grid item xs={12}>
+                                <Stack direction="row" spacing={1} alignItems="center">
+                                    <FormControl size="small" sx={{ minWidth: 250 }}>
+                                        <InputLabel id="webid-result-select-label">WebID Evidence</InputLabel>
+                                        <Select
+                                            multiple
+                                            labelId="webid-result-select-label"
+                                            label="WebID Evidence"
+                                            value={selectedWebIdResultId}
+                                            onChange={handleEvidenceSelection}
+                                        >
+                                            {webIdResults.map((result) => (
+                                                <MenuItem key={result.id} value={result.id}>
+                                                    <Checkbox size="small" checked={selectedWebIdResultId.includes(result.id)} />
+                                                    {new Date(result.time).toLocaleString()} — {result.isotopeString || result.isotopes?.map(i => i.name).join(', ') || 'No isotopes'}
+                                                </MenuItem>
+                                            ))}
+                                        </Select>
+                                    </FormControl>
+                                    <Button
+                                        size="small"
+                                        variant="outlined"
+                                        color="info"
+                                        disabled={selectedWebIdResultId.length === 0}
+                                        onClick={applySelectedWebIdResult}
+                                        sx={{ whiteSpace: 'nowrap' }}
+                                    >
+                                        Use Selected Result
+                                    </Button>
+                                </Stack>
+                            </Grid>
+                        )}
+
+                        <Grid item xs={12}>
+                            <TextField
+                                id="outlined-multiline-static"
+                                label="Notes"
+                                name="notes"
+                                multiline
+                                rows={4}
+                                value={feedback}
+                                onChange={handleChange}
+                                fullWidth
+                            />
+                        </Grid>
+                    </Grid>
+
+                    <Grid item container xs={12} spacing={2} alignItems="center" justifyContent="flex-end">
+                        <Grid item xs={"auto"}>
+                            <Stack direction="row" spacing={2} alignItems="center">
+                                <SecondaryInspectionSelect
+                                    secondarySelectVal={secondaryInspection}
+                                    onSelect={handleInspectionSelect}
+                                />
+                                <Button
+                                    size="large"
+                                    disableElevation
+                                    variant={"contained"}
+                                    color={"success"}
+                                    onClick={sendAdjudicationData}
+                                >
+                                    Submit
+                                </Button>
+                            </Stack>
+                        </Grid>
+                    </Grid>
+
+                    <Dialog
+                        open={openConfirmDialog}
+                        onClose={() => setOpenConfirmDialog(false)}
+                        fullWidth
+                        maxWidth="sm"
+                    >
+                        <DialogTitle sx={{ pb: 1 }}>
+                            Confirm Adjudication Submission
+                        </DialogTitle>
+                        <DialogContent dividers sx={{ px: 1.5 }}>
+                            <Stack spacing={1.5}>
+                                {vehicleId && (
+                                    <>
+                                        <Box>
+                                            <Typography variant="subtitle2" color="text.secondary">Vehicle ID</Typography>
+                                            <Typography variant="body1">{vehicleId}</Typography>
+                                        </Box>
+                                        <Divider />
+                                    </>
+                                )}
+
+                                <Box>
+                                    <Typography variant="subtitle2" color="text.secondary">Adjudication Code</Typography>
+                                    <Typography variant="body1" sx={{ wordBreak: 'break-word' }}>
+                                        {adjData.adjudicationCode?.label} ({adjData.adjudicationCode?.group})
+                                    </Typography>
+                                </Box>
+                                <Divider />
+
+                                {isotope.length > 0 && (
+                                    <>
+                                        <Box>
+                                            <Typography variant="subtitle2" color="text.secondary">Isotopes</Typography>
+                                            <Typography variant="body1" sx={{ wordBreak: 'break-word' }}>{isotope.join(', ')}</Typography>
+                                        </Box>
+                                        <Divider />
+                                    </>
+                                )}
+
+                                {feedback && (
+                                    <>
+                                        <Box>
+                                            <Typography variant="subtitle2" color="text.secondary">Notes</Typography>
+                                            <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{feedback}</Typography>
+                                        </Box>
+                                        <Divider />
+                                    </>
+                                )}
+
+                                {uploadedFiles.length > 0 && (
+                                    <>
+                                        <Box>
+                                            <Typography variant="subtitle2" color="text.secondary">Files ({uploadedFiles.length})</Typography>
+                                            <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+                                                {uploadedFiles.map((fileData, index) => (
+                                                    <Box key={index}>
+                                                        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+                                                            <InsertDriveFileRoundedIcon fontSize="small" sx={{ flexShrink: 0 }} />
+                                                            <Typography variant="body2" noWrap sx={{ minWidth: 0 }}>{fileData.file.name}</Typography>
+                                                        </Stack>
+                                                        {fileData.webIdEnabled && (
+                                                            <Typography variant="caption" color="info.main" sx={{ pl: 3, display: 'block', wordBreak: 'break-word' }}>
+                                                                WebID: {fileData.spectrumType}, DRF: {fileData.detectorResponseFunction}
+                                                                {fileData.synthesizeBackground ? ', Synth BG' : ''}
+                                                            </Typography>
+                                                        )}
+                                                    </Box>
+                                                ))}
+                                            </Stack>
+                                        </Box>
+                                        <Divider />
+                                    </>
+                                )}
+
+                                {scannedData.length > 0 && (
+                                    <>
+                                        <Box>
+                                            <Typography variant="subtitle2" color="text.secondary">Scanned QR Codes ({scannedData.length})</Typography>
+                                            <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+                                                {scannedData.map((data, idx) => (
+                                                    <Typography key={idx} variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                                                        {data.text.length > 80 ? data.text.substring(0, 80) + '...' : data.text}
+                                                    </Typography>
+                                                ))}
+                                            </Stack>
+                                        </Box>
+                                        <Divider />
+                                    </>
+                                )}
+
+                                {secondaryInspection && (
+                                    <Box>
+                                        <Typography variant="subtitle2" color="text.secondary">Secondary Inspection</Typography>
+                                        <Typography variant="body1">{secondaryInspection}</Typography>
+                                    </Box>
+                                )}
+                            </Stack>
+                        </DialogContent>
+                        <DialogActions sx={{ px: 1.5, py: 1.5, flexDirection: { xs: 'column', sm: 'row' }, gap: 1 }}>
+                            <Button
+                                onClick={() => setOpenConfirmDialog(false)}
+                                color="error"
+                                fullWidth
+                                sx={{ width: { sm: 'auto' } }}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                onClick={confirmAndSubmitAdjudication}
+                                variant="contained"
+                                color="success"
+                                fullWidth
+                                sx={{ width: { sm: 'auto' } }}
+                            >
+                                Confirm & Submit
+                            </Button>
+                        </DialogActions>
+                    </Dialog>
+
+                    <Snackbar
+                        anchorOrigin={{vertical: 'top', horizontal: 'center'}}
+                        open={openSnack}
+                        autoHideDuration={5000}
+                        onClose={handleCloseSnack}
+                        message={adjSnackMsg}
+                        sx={{
+                            '& .MuiSnackbarContent-root': {
+                                backgroundColor: colorStatus === 'success' ? 'green' : 'red',
+                            },
+                        }}
+                    />
+                </Grid>
+            </Paper>
+
+        </Stack>
+    );
+}

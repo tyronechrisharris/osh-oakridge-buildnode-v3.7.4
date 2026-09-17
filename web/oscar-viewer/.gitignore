@@ -1,0 +1,14 @@
+# Project exclude paths
+/node_modules/
+/.idea
+/build
+/.next
+.DS_Store
+src/.DS_Store
+/out
+/web
+next-env.d.ts
+
+# Sentry Config File
+.env.sentry-build-plugin
+/cypress/screenshots

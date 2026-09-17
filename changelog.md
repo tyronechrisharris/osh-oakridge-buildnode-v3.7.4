@@ -1,0 +1,259 @@
+# OSCAR Build Node Change Log
+All notable changes to this project will be documented in this file. 
+## 3.7.3 2026-09-09
+## Changes
+- Allow installation when Docker has different permission set than administrator running setup command
+- Fix minor bug in UI where lane UIDs could not have extensions (e.g. "...:lane:north:1")
+
+## 3.7.2 2026-08-28
+## Changes
+- FFmpeg usage improvements
+
+## 3.7.1 2026-08-27
+## Changes
+- Added configurable CORS whitelist to Jetty HTTP server
+
+## 3.7.0 2026-08-22
+## Changes
+- Add cookie based session authentication as default so we dont store credentials in browser storage.
+- Fix OSCAR viewer map to auto-fly to sitemap, even when offline.
+- Add loading icon for unloaded client data.
+- Fix dashboard lane tamper status to persist across refresh.
+- MQTT fixes on client and server
+- Make OSCAR CLI clickable
+- Edit GH Actions workflow to generate offline builds
+- Add "verify" to CLI and some flags to offline builder
+
+## 3.6.2 2026-08-20
+## Changes
+- Fixed minor issue where GitHub actions workflow releases source containing node_modules, making source unnecessarily large
+
+## 3.6.1 2026-08-20
+## Changes
+- Fixed bug where OSCAR CLI would show `oscar.local` as local hostname but not auto-map. 
+  - Now this is automatically mapped on local machine to work.
+- Fixed bug where gamma charts display "Gamma 0" at the start of an occupancy
+
+## 3.6.0 2026-08-19
+### Changes
+- Decrease PostGIS connection pool size and idle time for connections
+- Modify PostGIS datastore queries to prevent SQL injection
+- Enforce file upload size limits and read-only permissions for files
+- Add file upload policy to block common executable files
+- Disable CSAPI HTML responses by default and add additional headers for security.
+- Containerize all app components (OSH, postgres, reverse proxy)
+- Remove default credentials from postgres and OSH
+- Harden postgres permissions in deployment
+- Added CLI for OSCAR initialization and app management
+
+## 3.5.1 2026-08-01
+### Changes
+- Removed anonymous user/role.
+- Enabled role-based access control for Connected Systems API by default.
+
+## 3.5.0 2026-04-24
+### Changes
+- Updated LaneSystem README
+
+This is the finalized release for OSCAR phase 3.5.
+
+## 3.3.6 2026-04-23
+### Changes
+- Updated documentation with correct launch script names
+
+## 3.3.5 2026-04-23
+### Fixes
+- Fixed bug in viewer with MQTT message parsing
+- Updated documentation to reflect new changes
+
+## 3.3.4 2026-04-22
+### Fixes
+- Fixed server side filtering with queries containing numeric comparisons
+
+## 3.3.3 2026-04-22
+### Fixes
+- Fixed crashes caused by spreadsheet import
+- Fixed locations not being deserialized/loaded from spreadsheet config
+
+## 3.3.2 2026-04-17
+### Fixes
+- Fixed crash caused by video retention bug
+- Fixed daily-file creation
+
+## 3.3.1 2026-04-09
+### Fixes
+- Fixed OSCAR notifications
+- Set video retention policy to enabled by default
+
+## 3.3.0 2026-04-08
+### Fixes
+- Fixed client dashboard UI to allow double tapping occupancy instead of scrolling to click on "Details" button
+- Fixed bug where video clips would not load on first /event-details page load
+- Fixed Cambio usage to work offline
+- Fixed bug where OSCAR Service Module would fail to restart
+
+### Changes
+- Modified occupancy data structure for RS350 occupancies, along with UI.
+  - (This makes 3.3.0 incompatible with previous versions)
+
+## 3.2.0 2026-04-04
+### Changes
+- Now fully supporting RS350 systems in backend and viewer
+- Updated notification models and redirects.
+- Updated Web ID / Adjudication UI
+- Automated RS350 N42 Web ID analysis
+
+## 3.1.0 2026-03-19
+### Changes
+- Attach node names to lane names on frontend dashboard to differentiate same-name lanes
+- Add mobile UI and PWA support (with push notifications)
+- Add support for adjudicating with Web ID supplemental analysis
+### Fixed
+- Fixed bug where chart points were out of order
+
+## 3.0.0 2026-02-04
+This is the official first release of 3.0.0
+### Changes
+- Data from database is purged regularly with "daily files" exported at midnight
+- Added internationalization (i18n) to the frontend
+- Sorted lanes by alphanumeric order in the frontend dashboard
+- Use server-side filters in frontend tables
+### Fixed
+- Fixed issue where database is queried everytime Admin UI is loaded
+
+## 3.0.0-rc.5 2025-12-11
+### Changes
+- Improved pagination speed on large datasets
+- Make the time at which stats are published configurable
+### Fixed
+- Fixed bug with HLS thread-locking which causes live video to be unavailable after some time
+
+## 3.0.0-rc.4 2025-12-05
+### Changes
+- Improved PostGIS query speed for observations
+- Improved site stats page load time
+### Fixed
+- Fixed bug where adjudications would not submit, and duplicate isotopes would appear in adjudications
+- Fixed an FFmpeg memory leak causing unbounded memory usage
+
+## 3.0.0-rc.3 2025-11-26
+### Fixed
+- Fixed issue with FFmpeg transcoding causing node to crash
+- Reduce launch script heap size to 6GB
+- Reduce thread count for Rapiscan drivers
+
+## 3.0.0-rc.2 2025-11-26
+### Fixed
+- Fixed issue with Windows `launch-all.bat` script not working
+- Fixed embedded MQTT server issue on Windows
+
+## 3.0.0-rc.1 - 2025-11-25
+### Fixed
+- Optimized requests on client via pagination and filtering
+- Fixed adjudications not working properly on client
+- Improved FFmpeg HLS latency and video consistency
+- Fixed PostGIS queries taking too long
+- Reverted launch script to use native JVM for OSH and Docker for PostGIS
+
+## 3.0.0-alpha.4 - 2025-11-17
+### Fixed
+- Fixed MQTT not disconnecting on client
+- Added fixes for FFmpeg issues
+- Fixed occupancy videos not attached to every occupancy
+- Fixed event preview charts
+- Fixed video switching in live video / events
+- Fixed issue where commands would never send due to duplicate control streams in CSAPI
+- Added fix to decrease HLS latency
+
+## 3.0.0-alpha.3 - 2025-11-12
+### Added
+- Added extra FFmpeg checks for invalid cameras.
+### Changed
+- Edited docker compose to restart OSH node on failure
+- Edited docker compose to not use managed volume
+- Edited ARM64 PostGIS Dockerfile to not use peer connection
+- Changed web client to use single MQTT Web Socket connection for dashboard connections
+
+## 3.0.0-alpha.2 - 2025-11-11
+### Added
+- Added MQTT Services to allow client to receive messages through a single persistent websocket instead of opening multiple websockets per lane.
+- Added video retention
+### Fixed
+- Updated PostGIS to be able to handle commands and command statuses.
+
+## 3.0.0-alpha.1 - 2025-11-07
+### Added
+- Added docker compose and Dockerfile for OSCAR OSH node, allowing PostGIS and OSH to be run with one script.
+### Changed
+- Swapped default H2 database with default PostGIS database.
+- Update report paths to use valid Windows path
+
+## 3.0.0-alpha - 2025-11-04
+### Added
+- [#19 Option to replace sitemap with site diagram](https://github.com/Botts-Innovative-Research/osh-oakridge-buildnode/issues/19)
+- [#43 Implement Report Generation](https://github.com/Botts-Innovative-Research/osh-oakridge-buildnode/issues/43)
+- [#48 Switched Database from H2 to PostgresSQL ](https://github.com/Botts-Innovative-Research/osh-oakridge-buildnode/issues/48)
+- [#53 Streamlined Initial Configuration via Spreadsheet Import](https://github.com/Botts-Innovative-Research/osh-oakridge-buildnode/issues/53)
+- Set up Sentry Testing
+- Added Unit Tests for all drivers - (Rapiscan, Aspect, FFMpeg, Lane System)
+- Set up Client testing using Cypress
+- Added GitHub Actions for testing
+### Changed
+- [#106 Update client playback videostreams](https://github.com/Botts-Innovative-Research/osh-oakridge-buildnode/issues/106)
+- Use local storage to save nodes configured on client server page.
+-
+### Removed
+- [#89 Upgrade Log4j from EOL 1.x to a secure version](https://github.com/Botts-Innovative-Research/osh-oakridge-buildnode/issues/89)
+### Fixed
+- [#101 National View does not show the accurate data collected by each site](https://github.com/Botts-Innovative-Research/osh-oakridge-buildnode/issues/101)
+
+## [2.3.1] - 2025-09-13
+### Added
+- Current PostGIS database module. (needs to be updated, but this provides a base for testing later versions of OSCAR)
+- Dockerfiles and script to launch PostGIS instance.
+### Changed
+- Restructured repository, moving most directories that are unused in development under `dist`
+
+## [2.3.0] 
+Release 2.3.0 
+
+### Added
+- Added Deployment version to config.json
+
+### Changed
+- [#89](https://github.com/Botts-Innovative-Research/osh-oakridge-buildnode/issues/89)
+Removed dependency to log4j
+
+### Fixed
+- [#90](https://github.com/Botts-Innovative-Research/osh-oakridge-buildnode/issues/90)
+Aspect Charts:The prior issue mentioned the Aspect RPMs and the Admin Panel, but this encompasses Aspects issues on the client as well.
+- [#]()
+Update charts in client to display Rapiscan and Aspect charts 
+- [#]()
+  Node Form Fix: Updated NodeForm to check if node is reachable before adding it to the list of Nodes, so when configuring a node it will ensure that you can access that node before it continues processing and updating the UI.
+
+
+## [2.2] - 2025-07-30
+Release 2.2 request, no updates since 1.3.7.
+
+
+## [1.3.7] 2025-07-18
+
+### Added
+- [#80](https://github.com/Botts-Innovative-Research/osh-oakridge-buildnode/issues/80)
+  FEATURE REQUEST: Changelog
+### Changed
+- ToggleButtons are disabled when selected to prevent no component showing (e.g. On event-preview when 'cps' chart is selected you can only toggle to 'nsigma' chart)
+- [#85](https://github.com/Botts-Innovative-Research/osh-oakridge-buildnode/issues/85)
+  Neutron Chart Tick Marks
+- [#86](https://github.com/Botts-Innovative-Research/osh-oakridge-buildnode/issues/86)
+  Remove "Adjudicated" Filter from Alarming Occupancy Table
+### Fixed
+- Navigate from Map to Lane View by clicking on point marker
+- [#90](https://github.com/Botts-Innovative-Research/osh-oakridge-buildnode/issues/90)
+  Aspect RPMS are not working in version 1.3.5
+- [#91](https://github.com/Botts-Innovative-Research/osh-oakridge-buildnode/issues/91)
+  OSCAR Viewer Stability
+- [#94](https://github.com/Botts-Innovative-Research/osh-oakridge-buildnode/issues/94)
+  Incorrect Video Timeframe Display Leading to Playback Failure
+- Aspect alarming events should now appear with charts/video in the event-preview and event-details

@@ -1,0 +1,165 @@
+# OSCAR Administrator Guide
+
+OSCAR runs as three Docker Compose services: an HTTPS gateway, the non-root OSCAR application, and PostgreSQL/PostGIS. The selected HTTPS port is published to the host, and port 80 redirects requests to HTTPS. PostgreSQL has no host port.
+
+Start with [QUICKSTART.md](QUICKSTART.md) for installation. This guide documents deployment choices and routine administration.
+
+## Supported initial hosts
+
+- Windows 11 x86-64 with Docker Desktop and WSL 2
+- Ubuntu Server 24.04 x86-64 with Docker Engine and the Compose plugin
+- Apple Silicon macOS with Docker Desktop; optional native-backed features may be unavailable and PostGIS runs under AMD64 emulation
+
+## Administrative CLI
+
+Use `oscar.bat` on Windows and `oscar.sh` on Ubuntu or macOS.
+
+Opening either launcher with no arguments starts a persistent `oscar>` administration menu. On Windows, double-clicking `oscar.bat` requests UAC elevation automatically; an Administrator PowerShell window does not need to be opened first. On graphical Linux, opening the executable `oscar.sh` starts the menu in a terminal. On macOS, open the executable script in Terminal. Desktop file-execution policy varies, so direct terminal commands remain the supported fallback. Ubuntu Server has no graphical launcher and is administered from its terminal.
+
+The menu accepts the same command and options shown below. For example, enter `init`, `status`, `logs -Service postgres -Follow` on Windows, or `logs --service postgres --follow` on Ubuntu/macOS. Enter `exit` to close the menu. Supplying arguments directly bypasses the menu, preserving automation compatibility.
+
+| Action | Windows | Ubuntu/macOS |
+| --- | --- | --- |
+| Initialize | `oscar.bat init` | `sudo bash oscar.sh init` |
+| Check prerequisites | `oscar.bat check` | `sudo bash oscar.sh check` |
+| Verify offline media | `oscar.bat verify` | `sudo bash oscar.sh verify` |
+| Start | `oscar.bat start` | `sudo bash oscar.sh start` |
+| Stop | `oscar.bat stop` | `sudo bash oscar.sh stop` |
+| Restart | `oscar.bat restart` | `sudo bash oscar.sh restart` |
+| Status | `oscar.bat status` | `sudo bash oscar.sh status` |
+| Logs | `oscar.bat logs` | `sudo bash oscar.sh logs` |
+| Upgrade | `oscar.bat upgrade` | `sudo bash oscar.sh upgrade` |
+
+Directly invoked mutating commands require an elevated Administrator PowerShell window on Windows or root privileges on Ubuntu/macOS. The Windows menu obtains elevation through UAC, and the Unix menu invokes `sudo` when a selected command requires it.
+
+`start`, `stop`, and `restart` never build or download images. `init` and `upgrade` may prepare missing images for a connected release. If `offline-images.tar` is present, image preparation uses only that archive and fails if any required image remains unavailable.
+
+Offline releases are published in two Windows x86-64 profiles:
+
+- `offline-full` contains OSCAR images plus the approved Docker Desktop and WSL installers.
+- `offline-images` contains OSCAR images only and requires Docker Desktop, WSL 2, and Docker Compose to be installed and running already.
+
+Initialization defaults to `-Prerequisites auto`, which uses a working existing Docker installation and only launches bundled installers when Docker is unavailable. Use `-Prerequisites existing` to prohibit prerequisite installation, or `-Prerequisites bundled` to explicitly permit the bundled fallback. The Unix equivalents are `--prerequisites auto|existing|bundled`.
+
+## Initial setup options
+
+The defaults are hostname `oscar.local`, HTTPS port `443`, and a self-signed certificate. Setup asks for an administrator password of at least 14 characters, generates unique database credentials, validates TLS, and starts the deployment.
+
+With the default HTTPS port, entering the configured hostname without a scheme is supported: the gateway redirects the browser from HTTP to HTTPS while preserving the requested path. Deployments using a nonstandard HTTPS port must include that port in the URL printed by setup.
+
+Windows example with an imported certificate:
+
+```powershell
+.\oscar.bat init -Hostname oscar.example.org -Port 443 `
+    -TlsMode import -CertificatePath C:\certs\server.crt `
+    -PrivateKeyPath C:\certs\server.key
+```
+
+Ubuntu/macOS equivalent:
+
+```sh
+sudo bash oscar.sh init --hostname oscar.example.org --port 443 \
+    --tls-mode import --certificate /secure/server.crt \
+    --private-key /secure/server.key
+```
+
+By default, setup maps the hostname only on the OSCAR host. Use `-SkipHostsEntry` or `--skip-hosts-entry` to leave local host resolution unchanged. Site DNS or a hosts entry is still required on every workstation that connects to OSCAR.
+
+`server.crt` must be a PEM certificate or chain. `server.key` must be its matching unencrypted PEM private key. The certificate subject alternative names must contain every DNS name or IP address used to reach OSCAR.
+
+For an isolated deployment, administrators may use a deployment-specific certificate authority and install only its public certificate on workstations. Never place the certificate-authority private key in this release directory, a container, or a diagnostic bundle.
+
+## Windows offline installation
+
+Extract the offline ZIP into a local NTFS directory. From an Administrator PowerShell window:
+
+```powershell
+.\verify-bundle.ps1
+.\oscar.bat init
+```
+
+The equivalent CLI command is `oscar.bat verify`. After successful verification, OSCAR records the hash of `SHA256SUMS`. Later `init` and `upgrade` operations skip the expensive full-file pass while that manifest remains unchanged. A replacement bundle with a different manifest invalidates the receipt and is verified again automatically. Routine commands do not perform full bundle verification; run `verify` explicitly whenever post-installation tampering is suspected.
+
+The full artifact can launch the bundled official installers when WSL or Docker Desktop is missing. The images-only artifact must be initialized with a working existing runtime:
+
+```powershell
+.\oscar.bat init -Prerequisites existing
+```
+
+If an installer requires a restart, restart Windows and run `oscar.bat init` again.
+
+The offline CLI does not contact package repositories or container registries. Docker Desktop licensing must be reviewed independently by the deploying organization.
+
+## Logs
+
+The default displays the last 200 lines from all services and exits:
+
+```powershell
+.\oscar.bat logs
+```
+
+Select a service and optionally follow it:
+
+```powershell
+.\oscar.bat logs -Service oscar -Tail 500
+.\oscar.bat logs -Service postgres -Follow
+.\oscar.bat logs -Service gateway
+```
+
+Ubuntu/macOS uses `--service`, `--tail`, and `--follow`.
+
+## Persistent state and secrets
+
+Initialization creates:
+
+```text
+.env
+secrets/oscar-admin-password.txt
+secrets/oscar-db-password.txt
+secrets/postgres-bootstrap-password.txt
+tls/server.crt
+tls/server.key
+```
+
+Docker Compose mounts secrets read-only. On Ubuntu, the setup CLI makes `secrets` and `tls` mode `0700`, with contained files readable by the deliberately non-root services. On Windows, it restricts the directories to the installing administrator and `SYSTEM` while preserving container-readable, read-only mounts.
+
+The application configuration is copied into the `oscar_state` volume on first startup. Runtime configuration saves update only that persistent copy. Application libraries and viewer assets remain read-only in the image. PostgreSQL data is stored in the `postgres_data` volume.
+
+`oscar stop` retains containers and both data volumes. Never run `docker compose down --volumes` unless permanent deletion of all OSCAR and PostgreSQL data is explicitly intended.
+
+WebID is disabled by default. Failure to reach an optional configured WebID endpoint must not prevent OSCAR from starting.
+
+## Security verification
+
+After startup:
+
+```sh
+docker compose ps
+docker compose exec postgres psql --username oscar_bootstrap --dbname gis --command "SELECT rolname, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls FROM pg_roles WHERE rolname = 'oscar_app';"
+```
+
+Every reported privilege flag for `oscar_app` must be false. A host scan must show port `80` and the configured HTTPS port, and must not show ports `8282` or `5432`. Port `80` must return only an HTTPS redirect.
+
+## Upgrade
+
+Back up the deployment first. Extract the new release over the existing deployment directory while preserving `.env`, `secrets/`, and `tls/`. Release archives do not contain those runtime files. Then run:
+
+```powershell
+.\oscar.bat upgrade
+```
+
+```sh
+sudo bash oscar.sh upgrade
+```
+
+The command reads the target version from the new release, updates only `OSCAR_VERSION` in the preserved `.env`, validates Compose, prepares the versioned images, recreates changed services, waits for health checks, and retains the fixed `oscar_state` and `postgres_data` volumes. It never removes volumes. Confirm the result with `oscar.bat status` (Windows) or `sudo bash oscar.sh status` (Ubuntu).
+
+On Windows, OSCAR grants the local `docker-users` group read-only access to the protected `secrets` and `tls` directories so Docker Desktop can mount them. This is required when setup is elevated with a different administrator account than the signed-in account running Docker Desktop. The group receives temporary write access only while `init` generates or imports the certificate.
+
+Database backup/restore, certificate renewal, rollback automation, and version-specific configuration migration are planned administrator operations and must be completed before upgrades are declared production-ready.
+
+## Compatibility scripts
+
+`setup.*`, `launch-all.*`, and `stop-all.*` remain as compatibility wrappers. New documentation and automation should use only `oscar.bat` or `oscar.sh`.
+
+Offline map layers are not currently required. The CLI retains an explicit MBTiles import TODO for a future milestone.
