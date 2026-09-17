@@ -4,14 +4,16 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import en from '../../locales/en.json';
 import es from '../../locales/es.json';
 import fr from '../../locales/fr.json';
+import el from '../../locales/el.json';
 
-type Locale = 'en' | 'es' | 'fr';
+export type Locale = 'en' | 'es' | 'fr' | 'el';
 type Translations = Record<string, string>;
 
 const translations: Record<Locale, Translations> = {
   en,
   es,
   fr,
+  el,
 };
 
 interface LanguageContextProps {
@@ -22,21 +24,31 @@ interface LanguageContextProps {
 
 const LanguageContext = createContext<LanguageContextProps | undefined>(undefined);
 
+const persistLanguage = (lang: Locale) => {
+  localStorage.setItem('language', lang);
+  document.cookie = `osh-language=${lang}; Path=/; Max-Age=31536000; SameSite=Lax`;
+  document.documentElement.lang = lang;
+};
+
 export const LanguageProvider = ({ children }: { children: ReactNode }) => {
   const [language, setLanguageState] = useState<Locale>('en');
   const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
-    const savedLanguage = localStorage.getItem('language') as Locale;
-    if (savedLanguage && translations[savedLanguage]) {
-      setLanguageState(savedLanguage);
-    }
+    const cookieLanguage = document.cookie
+      .split('; ')
+      .find((cookie) => cookie.startsWith('osh-language='))
+      ?.split('=')[1] as Locale | undefined;
+    const savedLanguage = (localStorage.getItem('language') || cookieLanguage) as Locale;
+    const initialLanguage = savedLanguage && translations[savedLanguage] ? savedLanguage : 'en';
+    setLanguageState(initialLanguage);
+    persistLanguage(initialLanguage);
     setIsLoaded(true);
   }, []);
 
   const setLanguage = (lang: Locale) => {
     setLanguageState(lang);
-    localStorage.setItem('language', lang);
+    persistLanguage(lang);
   };
 
   const t = (key: string) => {
